@@ -10,7 +10,7 @@ pub(super) fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u
     let unit = crate::options::unit().pt_per_unit();
     Dialog::Paragraph {
         rtl: rp.bidi,
-        align: format!("{:?}", rp.align.visual(rp.bidi)).to_lowercase(),
+        align: json!(rp.align.visual(rp.bidi)).as_str().unwrap_or("left").to_owned(),
         left: vl / unit,
         right: vr / unit,
         first: rp.indent_first / unit,

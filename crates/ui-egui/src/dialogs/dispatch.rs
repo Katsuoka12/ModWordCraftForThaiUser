@@ -293,7 +293,8 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     }
                 }
             });
-            const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
+            const ALIGNS: [(&str, &str); 5] =
+                [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify"), ("thaiDistribute", "Thai Distributed")];
             ui.horizontal(|ui| {
                 let align_label = ui.label(tl!("Alignment:"));
                 let shown =

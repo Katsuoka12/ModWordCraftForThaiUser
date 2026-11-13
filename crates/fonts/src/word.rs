@@ -744,7 +744,14 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
         let hhea = f.hhea().ok().map(|h| hhea_line(h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16()));
         let win = f.os2().ok().map(|o| (o.us_win_ascent() as f64, o.us_win_descent() as f64));
         let ok = |m: &(f64, f64)| m.0 > 0.0 && m.0 + m.1 <= face.upem * 2.0;
-        if let Some(m) = hhea.filter(ok) {
+        // Word on Windows gives TH SarabunPSK 20.96 pt at 16 pt: OS/2 850+460
+        // per 1000 em. Its hhea values give only 18.08 pt and shorten every page.
+        if cfg!(windows)
+            && face.family.eq_ignore_ascii_case("TH SarabunPSK")
+            && let Some(m) = win.filter(ok)
+        {
+            v = m;
+        } else if let Some(m) = hhea.filter(ok) {
             v = m;
         } else if let Some(m) = win.filter(ok) {
             v = m;

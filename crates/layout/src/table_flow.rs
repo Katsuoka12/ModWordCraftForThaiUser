@@ -70,6 +70,47 @@ pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapAre
     areas
 }
 
+pub(super) fn starts_with_kept_row(ctx: &Ctx, t: &wordcraft_doc::Table) -> bool {
+    t.props.float.is_none()
+        && t.rows
+            .first()
+            .and_then(|r| r.cells.first())
+            .and_then(|c| c.blocks.first())
+            .and_then(|b| b.as_para())
+            .is_some_and(|p| ctx.doc.styles.resolve_para(&p.props).keep_next)
+}
+
+/// A preceding kept heading needs room for the table's kept prefix, not just one line.
+/// Measure with private numbering and text box state, then restore the live flow.
+pub(super) fn kept_table_start(
+    ctx: &mut Ctx,
+    t: &wordcraft_doc::Table,
+    block: usize,
+    width: f32,
+    depth: usize,
+    counters: &mut wordcraft_doc::numbering::Counters,
+) -> f32 {
+    let live = std::mem::replace(&mut ctx.counters, counters.clone());
+    let boxes = std::mem::take(&mut ctx.boxes);
+    let chains = std::mem::take(&mut ctx.chains);
+    let track = std::mem::replace(&mut ctx.track_totals, false);
+    let laid = again(ctx, ctx.eq_count, |ctx| table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1));
+    *counters = std::mem::replace(&mut ctx.counters, live);
+    ctx.boxes = boxes;
+    ctx.chains = chains;
+    ctx.track_totals = track;
+    let mut height = 0.0;
+    for (ri, row) in laid.rows.iter().enumerate() {
+        if !row_keeps_next(row) {
+            // An unkept follower may start here and split, unless its row properties prevent it.
+            let full = t.rows.get(ri).is_some_and(|r| r.props.cant_split || r.props.height.is_some());
+            return height + if full { row.height } else { row.height.min(24.0) };
+        }
+        height += row.height;
+    }
+    height + super::flow::next_first_line(ctx, block, width, depth + 1, counters)
+}
+
 fn row_keeps_next(row: &table::RowLayout) -> bool {
     let Some(items) = row.cells.first().and_then(|cell| row.items.get(cell.items.clone())) else { return false };
     let Some((depth, story)) = items
@@ -202,6 +243,17 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         .filter_map(|i| tl.rows.get(*i))
         .map(|r| r.items.iter().map(|it| placed_cost(it, header_cap)).fold(0, usize::saturating_add).max(1))
         .fold(0, usize::saturating_add);
+    // A final row can keep with the first lines of the following body paragraph,
+    // including that paragraph's own keep chain. Look ahead without consuming numbering.
+    let following_height = if !pb.web
+        && tl.rows.last().is_some_and(row_keeps_next)
+        && let Some(wordcraft_doc::Block::Para(p)) = ctx.doc.body.get(block + 1).map(|b| &**b)
+        && !ctx.doc.styles.resolve_para(&p.props).page_break_before
+    {
+        super::flow::next_first_line(ctx, block, width, 0, &mut ctx.counters.clone())
+    } else {
+        0.0
+    };
     // Resolve kept chains once; nested paragraphs cannot keep their enclosing row.
     let mut kept: Vec<(usize, f32)> = (0..tl.rows.len()).map(|i| (i, 0.0)).collect();
     for i in (0..tl.rows.len().saturating_sub(1)).rev() {
@@ -272,11 +324,17 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 && rest.is_none()
                 && ri.checked_sub(1).and_then(|prev| kept.get(prev)).is_none_or(|&(end, _)| end < ri)
                 && kept.get(ri).is_some_and(|&(end, height)| {
+                    let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
+                    let page_height = pb.bottom - body_top - repeated_height;
+                    if end + 1 == tl.rows.len() && following_height > 0.0 {
+                        let need = height + laid.height + following_height;
+                        if need <= page_height + 0.01 {
+                            return need > pb.bottom - pb.y + 0.01;
+                        }
+                    }
                     if end == ri {
                         return false;
                     }
-                    let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
-                    let page_height = pb.bottom - body_top - repeated_height;
                     height <= page_height + 0.01 && !row_can_start(ctx.doc, next, laid, pb.bottom - pb.y - height, page_height)
                 });
             // A row another row follows needs room for the border below it too (measured in Word).

@@ -721,7 +721,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);
-    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    break_lines(&mut pl, &p.text, env, mark_style, env.label.as_ref().map(|(_, l)| l));
     if gone {
         collapse(&mut pl);
     }
@@ -857,6 +857,10 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
         })
         .collect();
     found.extend(hyphen_breaks);
+    // Unicode class SA needs language-specific segmentation. Add only adjacent word
+    // boundaries inside Thai runs so punctuation and spaces retain the Unicode rules.
+    let thai_words = wordcraft_doc::cluster::thai_words(text);
+    found.extend(thai_words.windows(2).filter(|words| words[0].end == words[1].start).map(|words| words[1].start));
     // The breaks added above come after UAX #14's: put them back in order.
     found.sort_unstable();
     found.dedup();
@@ -876,6 +880,16 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
 
 #[cfg(test)]
 mod padding_tests {
+    #[test]
+    fn thai_can_wrap_between_dictionary_words_without_spaces() {
+        let rp = wordcraft_doc::Document::new().styles.resolve_para(&Default::default());
+        let breaks = super::break_positions("ข้าวกับปลา", &rp);
+        for prefix in ["ข้าว", "ข้าวกับ"] {
+            assert!(breaks.contains(&prefix.len()));
+        }
+        assert!(!breaks.contains(&"ข".len()), "a tone mark stays on its base");
+    }
+
     /// ODF padding is physical: a right-to-left paragraph's left padding widens its end indent
     /// (the indents being logical), a left-to-right one's its start indent.
     #[test]

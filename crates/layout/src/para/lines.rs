@@ -12,6 +12,7 @@ const MIN_LINE_WIDTH: f32 = 1.0;
 /// What a paragraph's lines are broken with: the paragraph's measures and the state the lines
 /// are broken in, from one to the next.
 struct Breaker<'e> {
+    text: &'e str,
     level: Option<&'e Level>,
     rp: wordcraft_doc::resolve::ResolvedPara,
     mark_style: u32,
@@ -147,11 +148,11 @@ fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
 
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
 /// the list label. Fills `pl.lines`, `pl.height` and the label's position.
-pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
+pub(super) fn break_lines(pl: &mut ParaLayout, text: &str, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
     let width = env.width.max(MIN_LINE_WIDTH);
     let mirrored = pl.rp.bidi.then(|| mirrored_exclusions(env.exclusions, width));
     let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
-    let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level);
+    let mut bk = Breaker::new(pl, text, (env, exclusions), mark_style, level);
     loop {
         let mut sc = bk.begin_line(pl);
         sc.scan(&mut bk, pl);
@@ -168,7 +169,7 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
 }
 
 impl<'e> Breaker<'e> {
-    fn new(pl: &ParaLayout, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), mark_style: u32, level: Option<&'e Level>) -> Self {
+    fn new(pl: &ParaLayout, text: &'e str, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), mark_style: u32, level: Option<&'e Level>) -> Self {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);
         let settings = &env.doc.settings;
@@ -179,6 +180,7 @@ impl<'e> Breaker<'e> {
             .unwrap_or(14.0)
             .max(1.0);
         Breaker {
+            text,
             level,
             mark_style,
             exclusions,
@@ -574,13 +576,14 @@ impl<'e> Breaker<'e> {
         }
         // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
-        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
+        let justify =
+            display.is_none() && ((matches!(rp.align, Align::Justify | Align::ThaiDistribute) && stretch_end) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 {
-            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
+            justify_line(pl, self.text, &mut sc.xs, (c0, c1, align_from), (content_end, slack));
         }
     }
 
@@ -727,9 +730,40 @@ fn content_end(pl: &ParaLayout, sc: &Scan, c1: usize) -> f32 {
     content_end
 }
 
-/// Stretch the line to its right edge: its spaces widen by `slack` between them, or all its
-/// clusters by an equal share when `distribute` (or there are no spaces).
-fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, usize, usize), (content_end, slack): (f32, f32), distribute: bool) {
+/// Distribute the remaining width at spaces and between complete Thai clusters.
+fn distribute_thai(pl: &ParaLayout, text: &str, xs: &mut [f32], c0: usize, content: std::ops::Range<usize>, slack: f32) {
+    // Gap indices are the first drawing segment *after* an expandable boundary.
+    // A mark in a different font or style still moves with its base.
+    let mut gaps = Vec::new();
+    let mut previous_thai = false;
+    let mut after_space = false;
+    for k in content {
+        let Some(c) = pl.clusters.get(k) else { continue };
+        if !takes_room(c) || !pl.is_edit_boundary(c.start) {
+            continue;
+        }
+        let thai = c.kind == ClKind::Text
+            && text.get(c.start..c.end).and_then(|s| s.chars().next()).is_some_and(|ch| ('\u{0e01}'..='\u{0e5b}').contains(&ch));
+        if after_space || (thai && previous_thai && c.g1 > c.g0) {
+            gaps.push(k - c0);
+        }
+        previous_thai = thai;
+        after_space = c.kind == ClKind::Space;
+    }
+    if !gaps.is_empty() {
+        let per = slack / gaps.len() as f32;
+        let mut count = 0;
+        for (i, x) in xs.iter_mut().enumerate() {
+            if gaps.get(count) == Some(&i) {
+                count += 1;
+            }
+            *x += per * count as f32;
+        }
+    }
+}
+
+/// Stretch spaces, distributed characters, or Thai cluster boundaries according to the paragraph alignment.
+fn justify_line(pl: &ParaLayout, text: &str, xs: &mut [f32], (c0, c1, align_from): (usize, usize, usize), (content_end, slack): (f32, f32)) {
     // Spaces before the line's first character (after the last tab) keep their width, as in Word:
     // text indented with spaces stays where the spaces put it. Zero-width markers (a bookmark,
     // hidden text), floating objects' anchors and the break a line ends with don't count as a
@@ -741,6 +775,12 @@ fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, u
         })
     };
     let text_from = (align_from..c1).find(|k| !blank(*k)).unwrap_or(c1);
+    let text_to = || (text_from..c1).rev().find(|k| !blank(*k)).map_or(text_from, |k| k + 1);
+    if pl.rp.align == Align::ThaiDistribute {
+        distribute_thai(pl, text, xs, c0, text_from..text_to(), slack);
+        return;
+    }
+    let distribute = pl.rp.align == Align::Distribute;
     // Spaces inside the content.
     let spaces: Vec<usize> = (text_from..c1)
         .filter(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Space) && xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01)
@@ -748,8 +788,7 @@ fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, u
     if distribute || spaces.is_empty() {
         // Distributed across the gaps between the first and last characters: spaces hanging at
         // the line's end take none, so the last character reaches the margin.
-        let text_to = (text_from..c1).rev().find(|k| !blank(*k)).map_or(text_from, |k| k + 1);
-        let cnt = (text_to - text_from).saturating_sub(1).max(1) as f32;
+        let cnt = (text_to() - text_from).saturating_sub(1).max(1) as f32;
         if distribute {
             let per = slack / cnt;
             for (q, v) in xs.iter_mut().enumerate().skip(text_from - c0) {

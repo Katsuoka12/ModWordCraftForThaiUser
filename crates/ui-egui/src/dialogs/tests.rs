@@ -470,6 +470,26 @@ fn mixed_selection() -> WordApp {
 }
 
 #[test]
+fn thai_distributed_ribbon_formats_the_selection_and_reopens_in_paragraph_dialog() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("น้ำผึ้ง\nหนึ่งช้อน");
+    app.run("select.all", json!({})).unwrap();
+    let mut h = app_harness(app);
+    h.run_steps(3);
+    h.get_by_label("Thai Distributed").click();
+    h.run_steps(3);
+    for i in 0..2 {
+        assert_eq!(para_props(h.state(), i).align, Some(wordcraft_doc::Align::ThaiDistribute));
+    }
+    let Some(Dialog::Paragraph { align, .. }) = Dialog::open("paragraph", h.state_mut()) else { panic!("no paragraph dialog") };
+    assert_eq!(align, "thaiDistribute");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    for i in 0..2 {
+        assert_ne!(para_props(h.state(), i).align, Some(wordcraft_doc::Align::ThaiDistribute));
+    }
+}
+
+#[test]
 fn paragraph_dialog_leaves_what_the_selected_paragraphs_differ_in() {
     // #1346: OK gave every selected paragraph the caret paragraph's formatting, as three
     // undo steps.

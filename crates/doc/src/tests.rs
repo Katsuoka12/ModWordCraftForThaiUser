@@ -13,6 +13,12 @@ fn new_document_is_valid() {
 }
 
 #[test]
+fn unspaced_thai_words_and_mixed_script_count_separately() {
+    assert_eq!(crate::count_words("ข้าวกับปลา"), 3);
+    assert_eq!(crate::count_words("ABC ข้าวกับปลา 123"), 5);
+}
+
+#[test]
 fn word_count() {
     let d = Document::from_text("Hello, world!\nThis is — a test 42.\n\n");
     assert_eq!(d.word_count(), 7);

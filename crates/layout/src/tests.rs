@@ -6341,6 +6341,31 @@ fn distributed_line_ending_in_line_break_reaches_the_margin() {
 }
 
 #[test]
+fn thai_distributed_keeps_marks_together_and_the_last_line_short() {
+    let first = "กี้ข้าว";
+    let text = format!("{first}\nจบ");
+    let layout = |align| {
+        let mut d = Document::new();
+        let mut p = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+        p.props.align = Some(align);
+        d.body = vec![wordcraft_doc::para_block(p)];
+        // A run boundary inside กี้ gives the renderer separate drawing segments.
+        d.format_range(&Pos::body(0, "ก".len()), &Pos::body(0, "กี้".len()), &|c| c.italic = Some(true)).unwrap();
+        let l = lay(&d);
+        l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap()
+    };
+    let plain = layout(Align::Left);
+    let thai = layout(Align::ThaiDistribute);
+    assert_eq!(thai.lines.len(), 2);
+    assert_eq!(thai.lines[1].xs, plain.lines[1].xs);
+    let line = &thai.lines[0];
+    let mark = thai.clusters.iter().position(|c| c.start == "ก".len()).unwrap();
+    assert_eq!(line.xs[mark], plain.lines[0].xs[mark]);
+    assert!(thai.x_of(0, "กี้".len()).unwrap() > plain.x_of(0, "กี้".len()).unwrap());
+    assert!((thai.x_of(0, first.len()).unwrap() - line.right).abs() < 0.05);
+}
+
+#[test]
 fn lines_with_tabs_never_shrink() {
     crate::test_fonts();
     let text = "Item\tWe tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(30);
@@ -12703,6 +12728,36 @@ fn row_keep_pages(d: &Document) -> Vec<usize> {
                 .unwrap()
         })
         .collect()
+}
+
+#[test]
+fn heading_keeps_with_table_and_the_paragraph_after_its_final_row() {
+    let mut d = row_keep_doc();
+    d.table_mut(StoryRef::Body, &Path::top(1)).unwrap().rows[1].props.height = Some(35.0);
+    d.para_mut(StoryRef::Body, &Path(vec![1, 1, 0, 0])).unwrap().props.keep_next = Some(true);
+    let mut heading = Paragraph::with_text("Budget", Default::default());
+    heading.props.keep_next = Some(true);
+    d.body.insert(1, wordcraft_doc::para_block(heading));
+    let mut after = Paragraph::with_text("Next section", Default::default());
+    after.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(60.0));
+    d.body.push(wordcraft_doc::para_block(after));
+    let l = lay(&d);
+    let page = |path: &Path| l.pages.iter().position(|p| p.items.iter().any(|item| matches!(item, Placed::Lines { path: own, .. } if own == path)));
+    assert_eq!(page(&Path::top(1)), Some(1));
+    assert_eq!(page(&Path(vec![2, 0, 0, 0])), Some(1));
+    assert_eq!(page(&Path::top(3)), Some(1));
+}
+
+#[test]
+fn final_kept_table_row_follows_body_paragraph() {
+    let mut d = row_keep_doc();
+    d.table_mut(StoryRef::Body, &Path::top(1)).unwrap().rows[1].props.height = Some(35.0);
+    let mut p = Paragraph::with_text("After table", Default::default());
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(60.0));
+    d.body.push(wordcraft_doc::para_block(p));
+    assert_eq!(row_keep_pages(&d), [0, 0]);
+    d.para_mut(StoryRef::Body, &Path(vec![1, 1, 0, 0])).unwrap().props.keep_next = Some(true);
+    assert_eq!(row_keep_pages(&d), [1, 1]);
 }
 
 #[test]

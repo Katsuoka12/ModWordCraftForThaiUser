@@ -16,6 +16,7 @@ workspace = true
 test-support = []
 
 [dependencies]
+kham-core = "0.8.2"
 wordcraft-geom = { workspace = true }
 base64 = { workspace = true }
 log = { workspace = true }

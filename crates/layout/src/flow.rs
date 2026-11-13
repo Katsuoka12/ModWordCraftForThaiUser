@@ -1000,7 +1000,7 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
 /// when the paragraph after it cannot start on the page (#966).
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
+pub(super) fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
@@ -1056,6 +1056,9 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                         to(0)
                     }
             }
+        }
+        Some(Block::Table(t)) if depth < 8 && super::table_flow::starts_with_kept_row(ctx, t) => {
+            super::table_flow::kept_table_start(ctx, t, block + 1, width, depth, counters)
         }
         Some(Block::Table(_)) => 24.0,
         None => 0.0,

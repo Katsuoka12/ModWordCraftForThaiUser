@@ -7,6 +7,17 @@ use super::{InlineObject, Numbering, numbering, para, section, styles};
 /// alphanumeric char, plus each Han ideograph and kana as a word of its own (Chinese and Japanese
 /// are written without spaces, #4547; Korean is spaced, so Hangul counts by tokens).
 pub fn count_words(s: &str) -> usize {
+    let words = crate::cluster::thai_words(s);
+    let mut end = 0;
+    let mut count = words.len();
+    for word in words {
+        count += count_other_words(&s[end..word.start]);
+        end = word.end;
+    }
+    count + count_other_words(&s[end..])
+}
+
+fn count_other_words(s: &str) -> usize {
     // The half-width voiced sound marks belong to the kana before them, not a word of their own.
     let word_char = |c: char| c.is_alphanumeric() && !matches!(c, '\u{FF9E}' | '\u{FF9F}');
     let tokens = s.split(|c: char| c.is_whitespace() || c == para::OBJ || is_cjk_word(c)).filter(|w| w.chars().any(word_char)).count();

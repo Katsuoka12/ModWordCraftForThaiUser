@@ -174,6 +174,32 @@ pub fn myanmar_breaks(text: &str) -> Vec<usize> {
     out
 }
 
+/// Byte ranges of dictionary words inside Thai runs. Preserve the caller's text offsets,
+/// including combining marks; other scripts keep their existing word and line rules.
+pub fn thai_words(text: &str) -> Vec<std::ops::Range<usize>> {
+    static TOKENIZER: std::sync::OnceLock<kham_core::Tokenizer> = std::sync::OnceLock::new();
+    let thai = |ch: char| ('\u{0e01}'..='\u{0e5b}').contains(&ch);
+    let mut words = Vec::new();
+    let mut offset = 0;
+    while let Some(tail) = text.get(offset..)
+        && let Some(start) = tail.find(thai)
+    {
+        offset += start;
+        let run = &tail[start..];
+        let len = run.find(|ch| !thai(ch)).unwrap_or(run.len());
+        let tokenizer = TOKENIZER.get_or_init(kham_core::Tokenizer::new);
+        words.extend(
+            tokenizer
+                .segment(&run[..len])
+                .into_iter()
+                .filter(|t| t.text.chars().any(char::is_alphanumeric))
+                .map(|t| offset + t.span.start..offset + t.span.end),
+        );
+        offset += len;
+    }
+    words
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

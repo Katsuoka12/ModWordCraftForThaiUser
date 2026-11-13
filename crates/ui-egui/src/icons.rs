@@ -238,6 +238,13 @@ fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
             ().then_lines(pen, 8.0, 17.0, &[7.0, 13.0])
         }
         "justify" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
+        "thaiDistribute" => {
+            pen.lines(3.0, 17.0, &[4.0, 8.0]);
+            for x in [3.0, 9.0, 15.0] {
+                pen.lines(x, x + 2.0, &[12.0]);
+            }
+            pen.lines(3.0, 10.0, &[16.0]);
+        }
         // Text direction: lines set from the start edge, an arrow in the reading direction.
         "textLtr" => {
             pen.lines(3.0, 14.0, &[4.0, 8.0]);
